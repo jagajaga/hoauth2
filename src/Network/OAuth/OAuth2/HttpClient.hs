@@ -72,7 +72,7 @@ authGetBS :: AccessToken
 authGetBS token url = liftM handleResponse go
                       where go = do
                                  req <- parseUrl $ BS.unpack $ url `appendAccessToken` token
-                                 authenticatedRequest token HT.GET req
+                                 authenticatedRequest token Nothing HT.GET req
 
 -- | Conduct POST request and return response as JSON.
 authPostJSON :: FromJSON a
@@ -90,20 +90,42 @@ authPostBS :: AccessToken
 authPostBS token url pb = liftM handleResponse go
                           where body = pb ++ accessTokenToParam token
                                 go = do
-                                     req <- parseUrl $ BS.unpack url
-                                     authenticatedRequest token HT.POST $  urlEncodedBody body req
+                                    req <- parseUrl $ BS.unpack url
+                                    authenticatedRequest token Nothing HT.POST $  urlEncodedBody body req
+
+authPostJSONWithBody :: FromJSON a =>
+                        AccessToken
+                        -> BS.ByteString
+                        -> [(BS.ByteString, BS.ByteString)]
+                        -> BS.ByteString
+                        -> IO (OAuth2Result a)
+authPostJSONWithBody token url pb body = liftM parseResponseJSON $ authPostBSwithBody token url pb body
+
+
+authPostBSwithBody :: AccessToken
+                    -> BS.ByteString
+                    -> [(BS.ByteString, BS.ByteString)]
+                    -> BS.ByteString
+                    -> IO (OAuth2Result BSL.ByteString)
+authPostBSwithBody token url pb body = liftM handleResponse go
+                          where header = pb ++ accessTokenToParam token
+                                body' = RequestBodyBS body
+                                go = do
+                                    req <- parseUrl $ BS.unpack url
+                                    authenticatedRequest token (Just body') HT.POST $ urlEncodedBody header req
 
 
 -- |Sends a HTTP request including the Authorization header with the specified
 --  access token.
 --
 authenticatedRequest :: AccessToken             -- ^ Authentication token to use
+                     -> Maybe RequestBody
                      -> HT.StdMethod                     -- ^ Method to use
                      -> Request        -- ^ Request to perform
                      -> IO (Response BSL.ByteString)
-authenticatedRequest token m r = withManager
+authenticatedRequest token body m r = withManager
                                  $ httpLbs
-                                 $ updateRequestHeaders (Just token)
+                                 $ updateRequestBody body . updateRequestHeaders (Just token)
                                  $ setMethod m r
 -- { checkStatus = \_ _ _ -> Nothing }
 
@@ -142,8 +164,15 @@ parseResponseJSON (Right b) = case decode b of
 updateRequestHeaders :: Maybe AccessToken -> Request -> Request
 updateRequestHeaders t req =
   let extras = [ (HT.hUserAgent, "hoauth2")
-               , (HT.hAccept, "application/json") ]
+               , (HT.hAccept, "application/json") 
+               , (HT.hContentType, "application/json") ]
       bearer = [(HT.hAuthorization, "Bearer " `BS.append` accessToken (fromJust t)) | isJust t]
-      headers = bearer ++ extras ++ requestHeaders req
+      headers = bearer ++ extras
   in
-  req { requestHeaders = headers }
+  req { requestHeaders = headers}
+
+updateRequestBody :: Maybe RequestBody -> Request -> Request
+updateRequestBody body req = case body of 
+    Just a -> req { requestBody = a }
+    _ -> req
+
